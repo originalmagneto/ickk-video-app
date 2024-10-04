@@ -1,64 +1,85 @@
 #!/bin/bash
 
-# Function to get the current version
-get_current_version() {
-    grep '"version":' package.json | cut -d '"' -f 4
-}
-
 # Function to increment version
 increment_version() {
     local version=$1
-    local release_type=$2
-    IFS='.' read -ra version_parts <<< "$version"
+    local major minor patch
 
-    case $release_type in
-        "patch")
-            ((version_parts[2]++))
-            ;;
-        "minor")
-            ((version_parts[1]++))
-            version_parts[2]=0
-            ;;
-        "major")
-            ((version_parts[0]++))
-            version_parts[1]=0
-            version_parts[2]=0
-            ;;
-    esac
+    # Split version into major, minor, and patch
+    IFS='.' read -r major minor patch <<< "$version"
 
-    echo "${version_parts[0]}.${version_parts[1]}.${version_parts[2]}"
+    # Increment patch version
+    patch=$((patch + 1))
+
+    echo "$major.$minor.$patch"
 }
 
-# Get the current version
-current_version=$(get_current_version)
+# Get the last tag (version)
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 
-# Prompt for release type
-echo "Current version: $current_version"
-echo "Enter release type (patch/minor/major):"
-read release_type
+# Remove 'v' prefix from the tag
+LAST_VERSION=${LAST_TAG#v}
 
-# Increment version
-new_version=$(increment_version "$current_version" "$release_type")
+# Increment the version
+NEW_VERSION=$(increment_version $LAST_VERSION)
 
-# Update version in package.json
-sed -i '' "s/\"version\": \"$current_version\"/\"version\": \"$new_version\"/" package.json
+# Get the current date
+RELEASE_DATE=$(date +"%Y-%m-%d")
 
-# Prompt for release notes
-echo "Enter release notes (Press Ctrl+D when finished):"
-release_notes=$(cat)
+# Generate release notes
+generate_release_notes() {
+    echo "Release $NEW_VERSION ($RELEASE_DATE)"
+    echo
+    echo "Changes:"
+    echo
 
-# Commit changes
+    # Get list of changed files
+    changed_files=$(git diff --name-only $LAST_TAG)
+
+    # Loop through changed files and describe changes
+    for file in $changed_files; do
+        if [[ $file == *.js || $file == *.jsx ]]; then
+            echo "- Updated $file:"
+            git diff $LAST_TAG -- $file | grep '^+' | grep -v '^+++' | sed 's/^+/  /'
+        elif [[ $file == *.css ]]; then
+            echo "- Styled $file:"
+            git diff $LAST_TAG -- $file | grep '^+' | grep -v '^+++' | sed 's/^+/  /'
+        elif [[ $file == *.html ]]; then
+            echo "- Modified HTML in $file"
+        elif [[ $file == *.md ]]; then
+            echo "- Updated documentation in $file"
+        else
+            echo "- Changed $file"
+        fi
+    done
+}
+
+# Generate release notes
+RELEASE_NOTES=$(generate_release_notes)
+
+# Save release notes to a file
+echo "$RELEASE_NOTES" > release_notes.txt
+
+# Commit all changes
 git add .
-git commit -m "Release $new_version"
+git commit -m "Prepare release $NEW_VERSION"
 
 # Create a new tag
-git tag -a "v$new_version" -m "Release $new_version"
+git tag -a "v$NEW_VERSION" -m "Release $NEW_VERSION"
 
-# Push changes and tags
+# Push changes and tags to GitHub
 git push origin main
-git push origin "v$new_version"
+git push origin "v$NEW_VERSION"
 
-# Create a GitHub release using the GitHub CLI
-gh release create "v$new_version" -t "Release $new_version" -n "$release_notes"
+# Create GitHub Release using GitHub CLI (gh)
+# Make sure you have GitHub CLI installed and authenticated
+if command -v gh &> /dev/null; then
+    gh release create "v$NEW_VERSION" -F release_notes.txt
+    echo "GitHub Release v$NEW_VERSION created successfully!"
+else
+    echo "GitHub CLI (gh) is not installed. Please create the release manually on GitHub."
+    echo "Use the contents of release_notes.txt for the release description."
+fi
 
-echo "Release $new_version created and pushed to GitHub"
+echo "Release $NEW_VERSION has been created and pushed to GitHub."
+echo "Release notes have been saved to release_notes.txt"
